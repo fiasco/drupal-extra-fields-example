@@ -1,0 +1,132 @@
+<?php
+/**
+ * @file
+ * Module file for example.
+ */
+
+/**
+ * Implements hook_field_extra_fields().
+ */
+function example_field_extra_fields() {
+  $extra['node']['article'] = array(
+    'display' => array(
+      'time' => array(
+        'label' => t('Last updated date'),
+        'description' => t('Display the date the article was last updated.'),
+        'weight' => 99,
+      ),
+      'created' => array(
+        'label' => t('Created date'),
+        'description' => t('Display the date the article was created.'),
+        'weight' => 100,
+        'visible' => FALSE,
+      ),
+    ),
+  );
+  return $extra;
+}
+
+/**
+ * Implements hook_node_view().
+ */
+function example_node_view($node, $view_mode, $langcode) {
+  $extra = example_field_extra_fields();
+
+  // Check that we're supporting the node type being viewed.
+  if (empty($extra['node'][$node->type]['display'])) {
+    return;
+  }
+
+  $config = field_bundle_settings('node', $node->type);
+  foreach ($extra['node'][$node->type]['display'] as $field_name => $field_info) {
+    // Check to make sure this field is visible in this view mode.
+    if (empty($config['extra_fields']['display'][$field_name][$view_mode]['visible'])) {
+      continue;
+    }
+
+    // Load our module's settings for the field, content type and view mode.
+    $format = variable_get('example_' . $field_name . '_format_node_' . $node->type . '_' . $view_mode, 'g:iA');
+    $date_field = ($field_name == 'time') ? 'changed' : 'created';
+    $timestamp  = $node->{$date_field};
+    $element = array(
+      '#tag' => 'span',
+      '#value' => format_date($timestamp, 'custom', $format),
+    );
+    $attributes = array();
+    if (module_exists('rdf')) {
+      $attributes = rdf_rdfa_attributes($node->rdf_mapping[$date_field], $timestamp);
+    }
+    $attributes['class'] = ($field_name == 'time') ? 'updated' : 'created';
+    $attributes['datetime'] = date_iso8601($timestamp);
+    $element['#attributes'] = $attributes;
+    $variables['element'] = $element;
+
+    // Add an "updated" highlighting to changed fields.
+    if ($field_name == 'time') {
+      $highlight = ($node->changed > strtotime('-1 hour', REQUEST_TIME)) && ($node->changed != $node->created);
+      if ($highlight) {
+        $variables['element']['#attributes']['class'] .= ' highlight';
+        $variables['element']['#value'] = t('Updated') . ' ' . $variables['element']['#value'];
+      }
+    }
+
+    $node->content[$field_name]['#markup'] = theme('html_tag', $variables);
+  }
+}
+
+/**
+ * Implements hook_form_field_ui_display_overview_form_alter().
+ */
+function example_form_field_ui_display_overview_form_alter(&$form, &$form_state) {
+  $extra = example_field_extra_fields();
+  if (!isset($extra[$form['#entity_type']], $extra[$form['#entity_type']][$form['#bundle']])) {
+    return;
+  }
+
+  $extra_fields = array_keys($extra[$form['#entity_type']][$form['#bundle']]['display']);
+  $extra_fields = array_intersect($extra_fields, $form['#extra']);
+
+  if (empty($extra_fields)) {
+    return;
+  }
+
+  // Get list of all available date formats.
+  $formats = array();
+  drupal_static_reset('system_get_date_formats');
+  $date_formats = system_get_date_formats(); // Call this to rebuild the list, and to have default list.
+  foreach ($date_formats as $type => $format_info) {
+    $formats = array_merge($formats, $format_info);
+  }
+  $custom_formats = system_get_date_formats('custom');
+  if (!empty($custom_formats)) {
+    $formats = array_merge($formats, $custom_formats);
+  }
+  $choices = array();
+  foreach ($formats as $f => $format) {
+    $choices[$f] = format_date(REQUEST_TIME, 'custom', $f);
+  }
+
+  foreach ($extra_fields as $field_name) {
+    $form['fields'][$field_name]['settings_edit'] = array(
+      '#type' => 'select',
+      '#options' => $choices,
+      '#default_value' => variable_get('example_' . $field_name . '_format_' . $form['#entity_type'] . '_' . $form['#bundle'] . '_' . $form['#view_mode'], 'g:iA'),
+    );
+    $form['fields'][$field_name]['settings_summary']['#markup'] = '<div class="field-formatter-summary">Date format</div>';
+  }
+  $form['#submit'][] = 'example_extra_field_date_format_submit';
+}
+
+/**
+ * Save the view mode settings for time format.
+ */
+function example_extra_field_date_format_submit(&$form, &$form_state) {
+  $extra = example_field_extra_fields();
+  $extra_fields = array_keys($extra[$form['#entity_type']][$form['#bundle']]['display']);
+
+  foreach ($extra_fields as $field_name) {
+    if (!empty($form_state['values']['fields'][$field_name]['settings_edit'])) {
+      variable_set('example_' . $field_name . '_format_' . $form['#entity_type'] . '_' . $form['#bundle'] . '_' . $form['#view_mode'], $form_state['values']['fields'][$field_name]['settings_edit']);
+    }
+  }
+}
